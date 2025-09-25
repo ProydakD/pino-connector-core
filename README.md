@@ -32,6 +32,12 @@ Instead of repeatedly implementing transports, redaction rules, and diagnostics 
 | **Multi-Team Platforms** | Enforce shared enrichment and redaction policies across all services.                                   |
 | **Internal Tooling**     | Provide production-grade logging for CLIs and workers without duplicating infrastructure code.          |
 
+## Installation
+
+```bash
+npm install pino-connector-core
+```
+
 ## Quick Start
 
 The following example demonstrates how to create a connector, add a transport, and log a message with context.
