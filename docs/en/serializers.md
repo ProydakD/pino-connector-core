@@ -43,4 +43,3 @@ Each serializer receives:
 ## Testing
 
 See tests/plugins/serializers/index.test.ts for reference patterns. Add additional cases for new keys or complex transformations.
-

@@ -12,11 +12,9 @@ pnpm run bench
 
 Пример вывода:
 
-`
-pino-baseline: 620000.00 ops/sec
+`pino-baseline: 620000.00 ops/sec
 connector    : 2750000.00 ops/sec
-overhead     : 0.00% (target 3.00%)
-`
+overhead     : 0.00% (target 3.00%)`
 
 Скрипт лежит в benchmarks/connector.ts. Он сравнивает прямую запись в dev-null с коннектором, использующим in-memory транспорт.
 

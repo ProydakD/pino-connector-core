@@ -79,4 +79,3 @@ Invalid input triggers InvalidConnectorConfigError. Typical causes:
 - Serializer map containing non-function values
 
 Wrap user input validation in adapters to surface clearer messages for consumers.
-

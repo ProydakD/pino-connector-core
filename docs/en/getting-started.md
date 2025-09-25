@@ -59,4 +59,3 @@ logger.info("connector online");
 - Register custom transports following [transports.md](transports.md).
 - Wire before and after hooks with [plugins.md](plugins.md).
 - Run the performance guardrail described in [benchmarks.md](benchmarks.md).
-

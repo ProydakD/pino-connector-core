@@ -12,11 +12,9 @@ pnpm run bench
 
 Sample output:
 
-`
-pino-baseline: 620000.00 ops/sec
+`pino-baseline: 620000.00 ops/sec
 connector    : 2750000.00 ops/sec
-overhead     : 0.00% (target 3.00%)
-`
+overhead     : 0.00% (target 3.00%)`
 
 The script lives at benchmarks/connector.ts. It builds a baseline logger that writes to a dev-null stream and compares it with a connector instance using an in-memory transport.
 
@@ -29,4 +27,3 @@ The script lives at benchmarks/connector.ts. It builds a baseline logger that wr
 ## Extending Benchmarks
 
 Duplicate the script for additional scenarios (multiple transports, heavy serializers) to capture targeted regressions.
-

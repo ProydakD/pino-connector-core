@@ -60,4 +60,3 @@ const afterPlugin = {
 - Unit tests live under tests/plugins/hooks/.
 - Integration coverage exists in tests/core/connector.test.ts.
 - Add regression tests when introducing new ordering rules or side effects.
-

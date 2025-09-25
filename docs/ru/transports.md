@@ -21,7 +21,10 @@ await connector.registerTransport(
     },
     // Метод `shutdown` вызывается при завершении работы коннектора.
     async shutdown() {
-      selfLogger.info({ transport: registration.name }, "транспорт http остановлен");
+      selfLogger.info(
+        { transport: registration.name },
+        "транспорт http остановлен",
+      );
     },
   }),
 );

@@ -42,4 +42,3 @@ Transports can implement getDiagnostics() to supply custom fields (queue depth, 
 - Repeated transport warnings: check network connectivity or credentials.
 - Rising serializer error counts: audit new fields hitting the pipeline.
 - Plugin failures: ensure hooks guard against missing metadata.
-

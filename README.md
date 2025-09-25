@@ -26,11 +26,11 @@ Instead of repeatedly implementing transports, redaction rules, and diagnostics 
 
 ## Common Use Cases
 
-| Scenario                 | Benefit                                                                                             |
-| ------------------------ | --------------------------------------------------------------------------------------------------- |
+| Scenario                 | Benefit                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- |
 | **Framework Adapters**   | Export a clean `createLogger()` API while the connector handles the complexity of transports and hooks. |
-| **Multi-Team Platforms** | Enforce shared enrichment and redaction policies across all services.                               |
-| **Internal Tooling**     | Provide production-grade logging for CLIs and workers without duplicating infrastructure code.        |
+| **Multi-Team Platforms** | Enforce shared enrichment and redaction policies across all services.                                   |
+| **Internal Tooling**     | Provide production-grade logging for CLIs and workers without duplicating infrastructure code.          |
 
 ## Quick Start
 
@@ -93,7 +93,9 @@ const connector = createConnector({
 });
 
 // This log will be enriched by the "user-tag" plugin
-connector.getRootLogger().info({ data: { user: { id: "42" } } }, "user logged in");
+connector
+  .getRootLogger()
+  .info({ data: { user: { id: "42" } } }, "user logged in");
 ```
 
 ### Reacting to Transport Failures with an "After" Plugin

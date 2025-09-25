@@ -55,4 +55,3 @@ Transport errors are captured and logged via the diagnostics logger. Results are
 - Use fixtures from tests/fixtures/ to simulate success and failure cases.
 - Verify diagnostics output when transports throw or return unhealthy status.
 - Cover backpressure and concurrency scenarios relevant to your adapters.
-

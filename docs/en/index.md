@@ -15,4 +15,3 @@ English | [Russian](../ru/index.md)
 ## Release Notes
 
 See .codex/notes/ for day-to-day decisions and ongoing work. Major release information will move here once automation is in place.
-

@@ -45,7 +45,9 @@ try {
   run("pnpm run build");
   run("pnpm run release:dry");
 
-  console.log(`\nRelease preparation complete. Version bumped from ${previousVersion} to ${nextVersion}.`);
+  console.log(
+    `\nRelease preparation complete. Version bumped from ${previousVersion} to ${nextVersion}.`,
+  );
   console.log("Review CHANGELOG.md and commit the results before publishing.");
 } catch (error) {
   console.error("Release script failed.", error);
