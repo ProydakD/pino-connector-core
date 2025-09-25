@@ -14,6 +14,7 @@ import {
   type ConnectorConfigInput,
   normalizeConnectorConfig
 } from './config/index.js';
+import { createAsyncContextManager } from './context/async-storage.js';
 import pino, { type Logger as PinoLogger, type LoggerOptions as PinoLoggerOptions } from 'pino';
 
 export type ConnectorState = 'running' | 'stopping' | 'stopped';
@@ -38,6 +39,11 @@ export interface Connector<TContext extends LogContext = LogContext> {
   updateConfig(next: ConnectorConfigInput): void;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
+  getContext(): TContext;
+  setContext(patch: Partial<TContext>): void;
+  runWithContext<TReturn>(context: TContext, callback: () => TReturn): TReturn;
+  runWithContext<TReturn>(context: TContext, callback: () => Promise<TReturn>): Promise<TReturn>;
+  resetContext(): void;
 }
 
 export function createConnector<TContext extends LogContext = LogContext>(
@@ -46,8 +52,13 @@ export function createConnector<TContext extends LogContext = LogContext>(
   let currentConfig = normalizeConnectorConfig(options.config);
   let currentState: ConnectorState = 'running';
 
+  const baseContext = options.contextProvider?.() ?? (currentConfig.context.initial as TContext);
+  const contextManager = createAsyncContextManager<TContext>({
+    initialContext: baseContext,
+    propagateAsync: currentConfig.context.propagateAsync
+  });
+
   const rawLogger = initializeLogger(options.logger, options.pinoOptions, currentConfig.level);
-  const contextProvider = options.contextProvider ?? (() => currentConfig.context.initial as TContext);
   const guard = createStateGuard(() => currentState);
   const applyLevel = (level: LogLevelName): void => {
     rawLogger.level = level;
@@ -56,7 +67,7 @@ export function createConnector<TContext extends LogContext = LogContext>(
       level
     };
   };
-  const rootLogger = createCoreLogger(rawLogger, contextProvider, guard, applyLevel);
+  const rootLogger = createCoreLogger(rawLogger, () => contextManager.getContext(), guard, applyLevel);
 
   const connector: Connector<TContext> = {
     get state(): ConnectorState {
@@ -71,8 +82,8 @@ export function createConnector<TContext extends LogContext = LogContext>(
     },
     createLogger(bindings?: LogBindings): CoreLogger<TContext> {
       guard();
-      const clonedBindings: LogBindings = { ...(bindings ?? {}) };
-      return rootLogger.bind(clonedBindings);
+      const sanitizedBindings: LogBindings = { ...(bindings ?? {}) };
+      return rootLogger.bind(sanitizedBindings);
     },
     getRawLogger(): PinoLogger {
       return rawLogger;
@@ -105,8 +116,12 @@ export function createConnector<TContext extends LogContext = LogContext>(
           enabled: currentConfig.diagnostics.enabled
         }
       });
+      contextManager.configure({
+        initialContext: mergedConfig.context.initial as TContext,
+        propagateAsync: mergedConfig.context.propagateAsync
+      });
       currentConfig = mergedConfig;
-      rawLogger.level = currentConfig.level;
+      rawLogger.level = mergedConfig.level;
     },
     async flush(): Promise<void> {
       guard();
@@ -120,6 +135,22 @@ export function createConnector<TContext extends LogContext = LogContext>(
       await flushLogger(rawLogger);
       await closeLoggerTransport(rawLogger);
       currentState = 'stopped';
+    },
+    getContext(): TContext {
+      guard();
+      return contextManager.getContext();
+    },
+    setContext(patch: Partial<TContext>): void {
+      guard();
+      contextManager.setContext(patch);
+    },
+    runWithContext<TReturn>(context: TContext, callback: () => TReturn | Promise<TReturn>): TReturn | Promise<TReturn> {
+      guard();
+      return contextManager.runWithContext(context, callback);
+    },
+    resetContext(): void {
+      guard();
+      contextManager.resetContext();
     }
   };
 
