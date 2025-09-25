@@ -6,3 +6,4 @@ export * from "./core/connector.js";
 export * from "./transports/index.js";
 export * from "./transports/stdout.js";
 export * from "./transports/custom/index.js";
+export * from "./plugins/serializers/index.js";

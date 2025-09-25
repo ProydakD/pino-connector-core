@@ -1,4 +1,4 @@
-import {
+﻿import {
   type CoreLogger,
   type DiagnosticsLogger,
   type LogBindings,
@@ -40,6 +40,11 @@ import {
   type HookLogger,
   type PluginExecutionPlan,
 } from "../plugins/hooks/index.js";
+import {
+  hasSerializers,
+  runSerializers,
+  type SerializerLogger,
+} from "../plugins/serializers/index.js";
 import pino, {
   type Logger as PinoLogger,
   type LoggerOptions as PinoLoggerOptions,
@@ -122,7 +127,9 @@ export function createConnector<TContext extends LogContext = LogContext>(
 
   let currentPluginPlan = buildPluginExecutionPlan(currentConfig.plugins);
   const getPluginPlan = () => currentPluginPlan;
+  const getSerializers = () => currentConfig.serializers;
   const pluginLogger = createPluginDiagnosticsLogger(rawLogger);
+  const serializerLogger = createSerializerDiagnosticsLogger(rawLogger);
 
   const customTransports = options.customTransports;
   const resolvedFactories = customTransports
@@ -173,7 +180,9 @@ export function createConnector<TContext extends LogContext = LogContext>(
     applyLevel,
     transportRegistry,
     getPluginPlan,
+    getSerializers,
     pluginLogger,
+    serializerLogger,
     {},
   );
 
@@ -382,7 +391,9 @@ class PinoCoreLogger<TContext extends LogContext>
     private readonly onLevelChange: (level: LogLevelName) => void,
     private readonly transportRegistry: TransportRegistry,
     private readonly getPluginPlan: () => PluginExecutionPlan,
+    private readonly getSerializers: () => SerializerMap,
     private readonly hookLogger: HookLogger,
+    private readonly serializerLogger: SerializerLogger,
     private readonly bindings: LogBindings,
   ) {}
 
@@ -411,7 +422,9 @@ class PinoCoreLogger<TContext extends LogContext>
       this.onLevelChange,
       this.transportRegistry,
       this.getPluginPlan,
+      this.getSerializers,
       this.hookLogger,
+      this.serializerLogger,
       sanitizedBindings,
     );
   }
@@ -477,6 +490,26 @@ class PinoCoreLogger<TContext extends LogContext>
       this.hookLogger.error("before hooks pipeline failed", { error });
     }
 
+    const serializers = this.getSerializers();
+    if (hasSerializers(serializers)) {
+      try {
+        const serialization = await runSerializers(
+          serializers,
+          finalRecord,
+          this.serializerLogger,
+        );
+        finalRecord = serialization.record;
+        if (serialization.telemetry.failed > 0) {
+          this.serializerLogger.warn("serializers pipeline reported failures", {
+            failed: serialization.telemetry.failed,
+            errors: serialization.telemetry.errors,
+          });
+        }
+      } catch (error) {
+        this.serializerLogger.error("serializers pipeline failed", { error });
+      }
+    }
+
     const payload = buildLogPayload(finalRecord);
     (
       this.raw as PinoLogger &
@@ -510,7 +543,9 @@ function createCoreLogger<TContext extends LogContext>(
   onLevelChange: (level: LogLevelName) => void,
   transportRegistry: TransportRegistry,
   getPluginPlan: () => PluginExecutionPlan,
+  getSerializers: () => SerializerMap,
   hookLogger: HookLogger,
+  serializerLogger: SerializerLogger,
   bindings: LogBindings,
 ): CoreLogger<TContext> {
   return new PinoCoreLogger(
@@ -520,7 +555,9 @@ function createCoreLogger<TContext extends LogContext>(
     onLevelChange,
     transportRegistry,
     getPluginPlan,
+    getSerializers,
     hookLogger,
+    serializerLogger,
     bindings,
   );
 }
@@ -727,4 +764,18 @@ function upsertTransports(
     }
   }
   return result;
+}
+
+function createSerializerDiagnosticsLogger(
+  logger: PinoLogger,
+): SerializerLogger {
+  const scoped = logger.child({ subsystem: "serializers" });
+  return {
+    warn(message: string, context?: Record<string, unknown>): void {
+      scoped.warn(context ?? {}, message);
+    },
+    error(message: string, context?: Record<string, unknown>): void {
+      scoped.error(context ?? {}, message);
+    },
+  };
 }
