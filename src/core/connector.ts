@@ -1,12 +1,15 @@
 import {
   type CoreLogger,
+  type DiagnosticsLogger,
   type LogBindings,
   type LogContext,
   type LogLevelName,
   type LogMetadata,
   type LogMethodArguments,
+  type LogRecord,
   type PluginRegistration,
   type SerializerMap,
+  type TransportFactory,
   type TransportRegistration
 } from './types.js';
 import {
@@ -15,6 +18,12 @@ import {
   normalizeConnectorConfig
 } from './config/index.js';
 import { createAsyncContextManager } from './context/async-storage.js';
+import {
+  createTransportRegistry,
+  type RegisteredTransport,
+  type TransportRegistry,
+  type TransportRegistryDiagnostics
+} from './transport-registry/index.js';
 import pino, { type Logger as PinoLogger, type LoggerOptions as PinoLoggerOptions } from 'pino';
 
 export type ConnectorState = 'running' | 'stopping' | 'stopped';
@@ -24,6 +33,7 @@ export interface CreateConnectorOptions<TContext extends LogContext = LogContext
   readonly pinoOptions?: PinoLoggerOptions;
   readonly logger?: PinoLogger;
   readonly contextProvider?: () => TContext;
+  readonly transportFactories?: Record<string, TransportFactory>;
 }
 
 export interface Connector<TContext extends LogContext = LogContext> {
@@ -35,6 +45,10 @@ export interface Connector<TContext extends LogContext = LogContext> {
   getTransports(): readonly TransportRegistration[];
   getPlugins(): readonly PluginRegistration[];
   getSerializers(): SerializerMap;
+  registerTransport(registration: TransportRegistration, factory: TransportFactory): Promise<void>;
+  removeTransport(name: string): Promise<void>;
+  listTransports(): readonly RegisteredTransport[];
+  getTransportDiagnostics(): TransportRegistryDiagnostics;
   setLevel(level: LogLevelName): void;
   updateConfig(next: ConnectorConfigInput): void;
   flush(): Promise<void>;
@@ -67,7 +81,18 @@ export function createConnector<TContext extends LogContext = LogContext>(
       level
     };
   };
-  const rootLogger = createCoreLogger(rawLogger, () => contextManager.getContext(), guard, applyLevel);
+  const transportRegistry = createTransportRegistry(createTransportDiagnosticsLogger(rawLogger));
+
+  bootstrapTransports(currentConfig.transports, options.transportFactories, transportRegistry);
+
+  const rootLogger = createCoreLogger(
+    rawLogger,
+    () => contextManager.getContext(),
+    guard,
+    applyLevel,
+    transportRegistry,
+    {}
+  );
 
   const connector: Connector<TContext> = {
     get state(): ConnectorState {
@@ -82,8 +107,10 @@ export function createConnector<TContext extends LogContext = LogContext>(
     },
     createLogger(bindings?: LogBindings): CoreLogger<TContext> {
       guard();
-      const sanitizedBindings: LogBindings = { ...(bindings ?? {}) };
-      return rootLogger.bind(sanitizedBindings);
+      if (!bindings || Object.keys(bindings).length === 0) {
+        return rootLogger;
+      }
+      return rootLogger.bind(bindings);
     },
     getRawLogger(): PinoLogger {
       return rawLogger;
@@ -96,6 +123,28 @@ export function createConnector<TContext extends LogContext = LogContext>(
     },
     getSerializers(): SerializerMap {
       return currentConfig.serializers;
+    },
+    async registerTransport(registration: TransportRegistration, factory: TransportFactory): Promise<void> {
+      guard();
+      const registered = await transportRegistry.register(registration, factory);
+      currentConfig = {
+        ...currentConfig,
+        transports: upsertTransport(currentConfig.transports, registered.registration)
+      };
+    },
+    async removeTransport(name: string): Promise<void> {
+      guard();
+      await transportRegistry.remove(name);
+      currentConfig = {
+        ...currentConfig,
+        transports: currentConfig.transports.filter((transport) => transport.name !== name)
+      };
+    },
+    listTransports(): readonly RegisteredTransport[] {
+      return transportRegistry.list();
+    },
+    getTransportDiagnostics(): TransportRegistryDiagnostics {
+      return transportRegistry.getDiagnostics();
     },
     setLevel(level: LogLevelName): void {
       guard();
@@ -125,15 +174,14 @@ export function createConnector<TContext extends LogContext = LogContext>(
     },
     async flush(): Promise<void> {
       guard();
-      await flushLogger(rawLogger);
+      await Promise.all([flushLogger(rawLogger), transportRegistry.flush()]);
     },
     async shutdown(): Promise<void> {
       if (currentState === 'stopped') {
         return;
       }
       currentState = 'stopping';
-      await flushLogger(rawLogger);
-      await closeLoggerTransport(rawLogger);
+      await Promise.all([flushLogger(rawLogger), transportRegistry.shutdown(), closeLoggerTransport(rawLogger)]);
       currentState = 'stopped';
     },
     getContext(): TContext {
@@ -197,7 +245,9 @@ class PinoCoreLogger<TContext extends LogContext> implements CoreLogger<TContext
     private readonly raw: PinoLogger,
     private readonly contextProvider: () => TContext,
     private readonly guard: () => void,
-    private readonly onLevelChange: (level: LogLevelName) => void
+    private readonly onLevelChange: (level: LogLevelName) => void,
+    private readonly transportRegistry: TransportRegistry,
+    private readonly bindings: LogBindings
   ) {}
 
   public get level(): LogLevelName {
@@ -218,7 +268,14 @@ class PinoCoreLogger<TContext extends LogContext> implements CoreLogger<TContext
     this.guard();
     const sanitizedBindings = { ...bindings };
     const child = this.raw.child(sanitizedBindings);
-    return new PinoCoreLogger(child, this.contextProvider, this.guard, this.onLevelChange);
+    return new PinoCoreLogger(
+      child,
+      this.contextProvider,
+      this.guard,
+      this.onLevelChange,
+      this.transportRegistry,
+      sanitizedBindings
+    );
   }
 
   public async flush(): Promise<void> {
@@ -257,6 +314,8 @@ class PinoCoreLogger<TContext extends LogContext> implements CoreLogger<TContext
 
   private dispatch(level: LogLevelName, args: LogMethodArguments): void {
     const [message, metadata] = args;
+    const record = buildLogRecord(level, message, metadata, this.contextProvider, this.bindings);
+    void this.transportRegistry.publish(record).catch(() => undefined);
     const payload = buildLogPayload(metadata, this.contextProvider);
     (this.raw as PinoLogger & Record<LogLevelName, (obj: object, msg: string) => void>)[level](payload, message);
   }
@@ -266,9 +325,11 @@ function createCoreLogger<TContext extends LogContext>(
   raw: PinoLogger,
   contextProvider: () => TContext,
   guard: () => void,
-  onLevelChange: (level: LogLevelName) => void
+  onLevelChange: (level: LogLevelName) => void,
+  transportRegistry: TransportRegistry,
+  bindings: LogBindings
 ): CoreLogger<TContext> {
-  return new PinoCoreLogger(raw, contextProvider, guard, onLevelChange);
+  return new PinoCoreLogger(raw, contextProvider, guard, onLevelChange, transportRegistry, bindings);
 }
 
 function buildLogPayload<TContext extends LogContext>(
@@ -307,6 +368,24 @@ function buildLogPayload<TContext extends LogContext>(
   return payload;
 }
 
+function buildLogRecord<TContext extends LogContext>(
+  level: LogLevelName,
+  message: string,
+  metadata: LogMetadata | undefined,
+  contextProvider: () => TContext,
+  bindings: LogBindings
+): LogRecord {
+  const context = contextProvider();
+  return {
+    level,
+    timestamp: Date.now(),
+    message,
+    bindings: { ...bindings },
+    context: { ...context },
+    metadata: metadata ? { ...metadata } : {}
+  };
+}
+
 function mergeContexts<TContext extends LogContext>(
   base: TContext,
   override: LogContext | undefined
@@ -337,4 +416,45 @@ async function closeLoggerTransport(logger: PinoLogger): Promise<void> {
   if (transport?.close) {
     await Promise.resolve(transport.close());
   }
+}
+
+function createTransportDiagnosticsLogger(logger: PinoLogger): DiagnosticsLogger {
+  const scoped = logger.child({ subsystem: 'transport-registry' });
+  return {
+    info(message: string, metadata?: LogMetadata): void {
+      scoped.info(metadata ?? {}, message);
+    },
+    warn(message: string, metadata?: LogMetadata): void {
+      scoped.warn(metadata ?? {}, message);
+    },
+    error(message: string, metadata?: LogMetadata): void {
+      scoped.error(metadata ?? {}, message);
+    }
+  };
+}
+
+function bootstrapTransports(
+  registrations: readonly TransportRegistration[],
+  factories: Record<string, TransportFactory> | undefined,
+  registry: TransportRegistry
+): void {
+  if (!factories) {
+    return;
+  }
+
+  registrations.forEach((registration) => {
+    const factory = factories[registration.name];
+    if (!factory) {
+      return;
+    }
+    void registry.register(registration, factory).catch(() => undefined);
+  });
+}
+
+function upsertTransport(
+  existing: readonly TransportRegistration[],
+  next: TransportRegistration
+): readonly TransportRegistration[] {
+  const filtered = existing.filter((transport) => transport.name !== next.name);
+  return [...filtered, next];
 }
