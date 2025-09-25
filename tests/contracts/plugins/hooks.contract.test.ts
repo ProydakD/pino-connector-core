@@ -6,7 +6,8 @@ import {
   runBeforeHooks,
 } from "../../../src/plugins/hooks/index.js";
 import type {
-  AfterLogHook,
+  AfterLogHookContext,
+  BeforeLogHookContext,
   HookLogger,
   LogRecord,
   PluginRegistration,
@@ -22,7 +23,7 @@ describe("plugin hook contract", () => {
         name: "beta",
         stage: "before",
         order: 10,
-        hook(context) {
+        hook(context: BeforeLogHookContext) {
           order.push("beta");
           context.setRecord({
             ...context.record,
@@ -34,7 +35,7 @@ describe("plugin hook contract", () => {
         name: "alpha",
         stage: "before",
         order: -5,
-        hook(context) {
+        hook(context: BeforeLogHookContext) {
           order.push("alpha");
           context.setRecord({
             ...context.record,
@@ -74,7 +75,7 @@ describe("plugin hook contract", () => {
       {
         name: "ok",
         stage: "before",
-        hook(context) {
+        hook(context: BeforeLogHookContext) {
           context.setRecord({
             ...context.record,
             metadata: { ...context.record.metadata, ok: true },
@@ -91,7 +92,7 @@ describe("plugin hook contract", () => {
       {
         name: "last",
         stage: "before",
-        hook(context) {
+        hook(context: BeforeLogHookContext) {
           context.setRecord({
             ...context.record,
             metadata: { ...context.record.metadata, last: true },
@@ -129,10 +130,10 @@ describe("plugin hook contract", () => {
         name: "last",
         stage: "after",
         order: 5,
-        hook: ((context) => {
+        hook(context: AfterLogHookContext) {
           callOrder.push("last");
           expect(context.transportResults).toHaveLength(1);
-        }) as AfterLogHook,
+        },
       },
       {
         name: "broken",
@@ -147,10 +148,10 @@ describe("plugin hook contract", () => {
         name: "first",
         stage: "after",
         order: -10,
-        hook: ((context) => {
+        hook(context: AfterLogHookContext) {
           callOrder.push("first");
           expect(context.record.message).toBe("after-record");
-        }) as AfterLogHook,
+        },
       },
     ];
 

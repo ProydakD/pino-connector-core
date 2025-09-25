@@ -62,7 +62,9 @@ describe("createStdoutTransport", () => {
     });
 
     expect(fakeStdout.chunks).toHaveLength(1);
-    const parsed = JSON.parse(fakeStdout.chunks[0].trim());
+    const chunk = fakeStdout.chunks[0];
+    expect(chunk).toBeDefined();
+    const parsed = JSON.parse(chunk!.trim());
     expect(parsed).toMatchObject({
       msg: "hello",
       bindings: { component: "test" },
@@ -85,7 +87,9 @@ describe("createStdoutTransport", () => {
       { selfLogger: logger },
     );
 
-    await transport.flush?.();
+    if (transport.flush) {
+      await transport.flush();
+    }
 
     expect(fakeStdout.flush).toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(

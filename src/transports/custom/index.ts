@@ -1,12 +1,8 @@
 import {
   type TransportFactory,
   type TransportRegistration,
+  type CustomTransportEntry,
 } from "../../core/types.js";
-
-export interface CustomTransportEntry {
-  readonly registration: TransportRegistration;
-  readonly factory: TransportFactory;
-}
 
 export interface CustomTransportStore {
   readonly factories: ReadonlyMap<string, TransportFactory>;

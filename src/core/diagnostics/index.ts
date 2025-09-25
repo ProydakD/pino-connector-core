@@ -9,7 +9,7 @@ import type {
   RegisteredTransport,
   TransportRegistryDiagnostics,
 } from "../transport-registry/index.js";
-import type { HookLogger } from "../../plugins/hooks/index.js";
+import type { HookLogger } from "../types.js";
 import type { SerializerLogger } from "../../plugins/serializers/index.js";
 import type { Logger as PinoLogger } from "pino";
 

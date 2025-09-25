@@ -7,6 +7,7 @@ import {
   type LogMetadata,
   type LogMethodArguments,
   type LogRecord,
+  type HookLogger,
   type PluginRegistration,
   type SerializerMap,
   type TransportFactory,
@@ -44,7 +45,6 @@ import {
   buildPluginExecutionPlan,
   runAfterHooks,
   runBeforeHooks,
-  type HookLogger,
   type PluginExecutionPlan,
 } from "../plugins/hooks/index.js";
 import {

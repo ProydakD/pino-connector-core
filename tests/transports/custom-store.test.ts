@@ -63,14 +63,12 @@ describe("custom transport store", () => {
     expect(() =>
       store.register({
         registration: { name: "delta", config: {} },
-        // @ts-expect-error invalid factory
-        factory: undefined,
+        factory: undefined as unknown as TransportFactory,
       }),
     ).toThrowError('Custom transport "delta" must include a factory function.');
 
     expect(() =>
       store.register({
-        // @ts-expect-error missing name
         registration: { name: "", config: {} },
         factory: noopFactory,
       }),

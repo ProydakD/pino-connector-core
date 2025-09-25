@@ -3,6 +3,7 @@ import {
   type AfterLogHookContext,
   type BeforeLogHook,
   type BeforeLogHookContext,
+  type HookLogger,
   type LogRecord,
   type PluginRegistration,
 } from "../../core/types.js";
@@ -27,11 +28,6 @@ export interface HookPlan<T> {
 export interface PluginExecutionPlan {
   readonly before: readonly HookPlan<BeforeLogHook>[];
   readonly after: readonly HookPlan<AfterLogHook>[];
-}
-
-export interface HookLogger {
-  warn(message: string, context?: Record<string, unknown>): void;
-  error(message: string, context?: Record<string, unknown>): void;
 }
 
 export function buildPluginExecutionPlan(

@@ -17,6 +17,8 @@ const waitForAsyncWork = (): Promise<void> =>
 function createStubLogger(): {
   readonly logger: PinoLogger;
   readonly warn: ReturnType<typeof vi.fn>;
+  readonly error: ReturnType<typeof vi.fn>;
+  readonly info: ReturnType<typeof vi.fn>;
 } {
   const warn = vi.fn();
   const info = vi.fn();

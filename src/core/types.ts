@@ -90,6 +90,11 @@ export interface DiagnosticsLogger {
   error(...args: LogMethodArguments): void;
 }
 
+export interface HookLogger {
+  warn(message: string, context?: Record<string, unknown>): void;
+  error(message: string, context?: Record<string, unknown>): void;
+}
+
 export interface BeforeLogHookContext {
   record: LogRecord;
   setRecord(next: LogRecord): void;
@@ -141,4 +146,9 @@ export interface ConnectorContracts {
   readonly transports: readonly TransportRegistration[];
   readonly plugins: readonly PluginRegistration[];
   readonly serializers: SerializerMap;
+}
+
+export interface CustomTransportEntry {
+  readonly registration: TransportRegistration;
+  readonly factory: TransportFactory;
 }
