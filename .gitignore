@@ -39,3 +39,4 @@ logs/
 !README*.md
 !CHANGELOG.md
 !*/*.md
+!docs/**/*.md
