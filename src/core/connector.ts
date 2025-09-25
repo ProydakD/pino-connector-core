@@ -24,6 +24,7 @@ import {
   type TransportRegistry,
   type TransportRegistryDiagnostics
 } from './transport-registry/index.js';
+import { builtinTransports, registerBuiltinTransports } from '../transports/index.js';
 import pino, { type Logger as PinoLogger, type LoggerOptions as PinoLoggerOptions } from 'pino';
 
 export type ConnectorState = 'running' | 'stopping' | 'stopped';
@@ -34,6 +35,8 @@ export interface CreateConnectorOptions<TContext extends LogContext = LogContext
   readonly logger?: PinoLogger;
   readonly contextProvider?: () => TContext;
   readonly transportFactories?: Record<string, TransportFactory>;
+  readonly useBuiltinTransports?: boolean;
+  readonly selfLogger?: DiagnosticsLogger;
 }
 
 export interface Connector<TContext extends LogContext = LogContext> {
@@ -81,9 +84,36 @@ export function createConnector<TContext extends LogContext = LogContext>(
       level
     };
   };
-  const transportRegistry = createTransportRegistry(createTransportDiagnosticsLogger(rawLogger));
+  const transportRegistry = createTransportRegistry(
+    options.selfLogger ?? createTransportDiagnosticsLogger(rawLogger)
+  );
 
-  bootstrapTransports(currentConfig.transports, options.transportFactories, transportRegistry);
+  void registerConfiguredTransports(
+    () => currentConfig.transports,
+    (nextTransports) => {
+      currentConfig = {
+        ...currentConfig,
+        transports: nextTransports
+      };
+    },
+    options.transportFactories,
+    transportRegistry,
+    rawLogger
+  );
+
+  if (options.useBuiltinTransports !== false) {
+    void registerMissingBuiltinTransports(
+      () => currentConfig.transports,
+      (nextTransports) => {
+        currentConfig = {
+          ...currentConfig,
+          transports: nextTransports
+        };
+      },
+      transportRegistry,
+      rawLogger
+    );
+  }
 
   const rootLogger = createCoreLogger(
     rawLogger,
@@ -171,6 +201,31 @@ export function createConnector<TContext extends LogContext = LogContext>(
       });
       currentConfig = mergedConfig;
       rawLogger.level = mergedConfig.level;
+      void registerConfiguredTransports(
+        () => currentConfig.transports,
+        (nextTransports) => {
+          currentConfig = {
+            ...currentConfig,
+            transports: nextTransports
+          };
+        },
+        options.transportFactories,
+        transportRegistry,
+        rawLogger
+      );
+      if (options.useBuiltinTransports !== false) {
+        void registerMissingBuiltinTransports(
+          () => currentConfig.transports,
+          (nextTransports) => {
+            currentConfig = {
+              ...currentConfig,
+              transports: nextTransports
+            };
+          },
+          transportRegistry,
+          rawLogger
+        );
+      }
     },
     async flush(): Promise<void> {
       guard();
@@ -181,7 +236,11 @@ export function createConnector<TContext extends LogContext = LogContext>(
         return;
       }
       currentState = 'stopping';
-      await Promise.all([flushLogger(rawLogger), transportRegistry.shutdown(), closeLoggerTransport(rawLogger)]);
+      await Promise.all([
+        flushLogger(rawLogger),
+        transportRegistry.shutdown(),
+        closeLoggerTransport(rawLogger)
+      ]);
       currentState = 'stopped';
     },
     getContext(): TContext {
@@ -192,7 +251,10 @@ export function createConnector<TContext extends LogContext = LogContext>(
       guard();
       contextManager.setContext(patch);
     },
-    runWithContext<TReturn>(context: TContext, callback: () => TReturn | Promise<TReturn>): TReturn | Promise<TReturn> {
+    runWithContext<TReturn>(
+      context: TContext,
+      callback: () => TReturn | Promise<TReturn>
+    ): TReturn | Promise<TReturn> {
       guard();
       return contextManager.runWithContext(context, callback);
     },
@@ -315,7 +377,9 @@ class PinoCoreLogger<TContext extends LogContext> implements CoreLogger<TContext
   private dispatch(level: LogLevelName, args: LogMethodArguments): void {
     const [message, metadata] = args;
     const record = buildLogRecord(level, message, metadata, this.contextProvider, this.bindings);
-    void this.transportRegistry.publish(record).catch(() => undefined);
+    void this.transportRegistry.publish(record).catch((error) => {
+      this.raw.warn({ error }, 'transport publish failed');
+    });
     const payload = buildLogPayload(metadata, this.contextProvider);
     (this.raw as PinoLogger & Record<LogLevelName, (obj: object, msg: string) => void>)[level](payload, message);
   }
@@ -358,7 +422,7 @@ function buildLogPayload<TContext extends LogContext>(
 
   const resolvedContext = mergeContexts(contextProvider(), context);
   if (hasEntries(resolvedContext)) {
-    payload.context = resolvedContext;
+      payload.context = resolvedContext;
   }
 
   if (error !== undefined) {
@@ -433,28 +497,68 @@ function createTransportDiagnosticsLogger(logger: PinoLogger): DiagnosticsLogger
   };
 }
 
-function bootstrapTransports(
-  registrations: readonly TransportRegistration[],
+async function registerConfiguredTransports(
+  getTransports: () => readonly TransportRegistration[],
+  setTransports: (transports: readonly TransportRegistration[]) => void,
   factories: Record<string, TransportFactory> | undefined,
-  registry: TransportRegistry
-): void {
+  registry: TransportRegistry,
+  logger: PinoLogger
+): Promise<void> {
   if (!factories) {
     return;
   }
 
-  registrations.forEach((registration) => {
+  const registrations = getTransports();
+  for (const registration of registrations) {
     const factory = factories[registration.name];
     if (!factory) {
-      return;
+      continue;
     }
-    void registry.register(registration, factory).catch(() => undefined);
-  });
+    try {
+      const registered = await registry.register(registration, factory);
+      setTransports(upsertTransport(getTransports(), registered.registration));
+    } catch (error) {
+      logger.warn({ error, transport: registration.name }, 'failed to register configured transport');
+    }
+  }
 }
 
-function upsertTransport(
+async function registerMissingBuiltinTransports(
+  getTransports: () => readonly TransportRegistration[],
+  setTransports: (transports: readonly TransportRegistration[]) => void,
+  registry: TransportRegistry,
+  logger: PinoLogger
+): Promise<void> {
+  const currentTransports = getTransports();
+  const missing = builtinTransports.filter(
+    (transport) => !currentTransports.some((existing) => existing.name === transport.registration.name)
+  );
+
+  if (missing.length === 0) {
+    return;
+  }
+
+  try {
+    await registerBuiltinTransports(registry, missing);
+    const updated = Array.from(getTransports());
+    for (const addition of missing.map((transport) => transport.registration)) {
+      const index = updated.findIndex((transport) => transport.name === addition.name);
+      if (index >= 0) {
+        updated[index] = addition;
+      } else {
+        updated.push(addition);
+      }
+    }
+    setTransports(updated);
+  } catch (error) {
+    logger.warn({ error }, 'failed to register builtin transports');
+  }
+}
+function upsertTransport(
   existing: readonly TransportRegistration[],
   next: TransportRegistration
 ): readonly TransportRegistration[] {
   const filtered = existing.filter((transport) => transport.name !== next.name);
   return [...filtered, next];
 }
+
