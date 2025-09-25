@@ -1,0 +1,309 @@
+import {
+  type CoreLogger,
+  type LogBindings,
+  type LogContext,
+  type LogLevelName,
+  type LogMetadata,
+  type LogMethodArguments,
+  type PluginRegistration,
+  type SerializerMap,
+  type TransportRegistration
+} from './types.js';
+import {
+  type ConnectorConfig,
+  type ConnectorConfigInput,
+  normalizeConnectorConfig
+} from './config/index.js';
+import pino, { type Logger as PinoLogger, type LoggerOptions as PinoLoggerOptions } from 'pino';
+
+export type ConnectorState = 'running' | 'stopping' | 'stopped';
+
+export interface CreateConnectorOptions<TContext extends LogContext = LogContext> {
+  readonly config?: ConnectorConfigInput;
+  readonly pinoOptions?: PinoLoggerOptions;
+  readonly logger?: PinoLogger;
+  readonly contextProvider?: () => TContext;
+}
+
+export interface Connector<TContext extends LogContext = LogContext> {
+  readonly state: ConnectorState;
+  readonly config: ConnectorConfig;
+  getRootLogger(): CoreLogger<TContext>;
+  createLogger(bindings?: LogBindings): CoreLogger<TContext>;
+  getRawLogger(): PinoLogger;
+  getTransports(): readonly TransportRegistration[];
+  getPlugins(): readonly PluginRegistration[];
+  getSerializers(): SerializerMap;
+  setLevel(level: LogLevelName): void;
+  updateConfig(next: ConnectorConfigInput): void;
+  flush(): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
+export function createConnector<TContext extends LogContext = LogContext>(
+  options: CreateConnectorOptions<TContext> = {}
+): Connector<TContext> {
+  let currentConfig = normalizeConnectorConfig(options.config);
+  let currentState: ConnectorState = 'running';
+
+  const rawLogger = initializeLogger(options.logger, options.pinoOptions, currentConfig.level);
+  const contextProvider = options.contextProvider ?? (() => currentConfig.context.initial as TContext);
+  const guard = createStateGuard(() => currentState);
+  const applyLevel = (level: LogLevelName): void => {
+    rawLogger.level = level;
+    currentConfig = {
+      ...currentConfig,
+      level
+    };
+  };
+  const rootLogger = createCoreLogger(rawLogger, contextProvider, guard, applyLevel);
+
+  const connector: Connector<TContext> = {
+    get state(): ConnectorState {
+      return currentState;
+    },
+    get config(): ConnectorConfig {
+      return currentConfig;
+    },
+    getRootLogger(): CoreLogger<TContext> {
+      guard();
+      return rootLogger;
+    },
+    createLogger(bindings?: LogBindings): CoreLogger<TContext> {
+      guard();
+      const clonedBindings: LogBindings = { ...(bindings ?? {}) };
+      return rootLogger.bind(clonedBindings);
+    },
+    getRawLogger(): PinoLogger {
+      return rawLogger;
+    },
+    getTransports(): readonly TransportRegistration[] {
+      return currentConfig.transports;
+    },
+    getPlugins(): readonly PluginRegistration[] {
+      return currentConfig.plugins;
+    },
+    getSerializers(): SerializerMap {
+      return currentConfig.serializers;
+    },
+    setLevel(level: LogLevelName): void {
+      guard();
+      applyLevel(level);
+    },
+    updateConfig(next: ConnectorConfigInput): void {
+      guard();
+      const mergedConfig = normalizeConnectorConfig({
+        level: next.level ?? currentConfig.level,
+        transports: next.transports ?? currentConfig.transports,
+        plugins: next.plugins ?? currentConfig.plugins,
+        serializers: next.serializers ?? currentConfig.serializers,
+        context: next.context ?? {
+          initial: currentConfig.context.initial,
+          propagateAsync: currentConfig.context.propagateAsync
+        },
+        diagnostics: next.diagnostics ?? {
+          enabled: currentConfig.diagnostics.enabled
+        }
+      });
+      currentConfig = mergedConfig;
+      rawLogger.level = currentConfig.level;
+    },
+    async flush(): Promise<void> {
+      guard();
+      await flushLogger(rawLogger);
+    },
+    async shutdown(): Promise<void> {
+      if (currentState === 'stopped') {
+        return;
+      }
+      currentState = 'stopping';
+      await flushLogger(rawLogger);
+      await closeLoggerTransport(rawLogger);
+      currentState = 'stopped';
+    }
+  };
+
+  return connector;
+}
+
+function initializeLogger(
+  providedLogger: PinoLogger | undefined,
+  options: PinoLoggerOptions | undefined,
+  level: LogLevelName
+): PinoLogger {
+  if (providedLogger) {
+    providedLogger.level = level;
+    return providedLogger;
+  }
+
+  return pino({
+    level,
+    ...options
+  });
+}
+
+function createStateGuard(getState: () => ConnectorState): () => void {
+  return () => {
+    const state = getState();
+    if (state === 'stopped') {
+      throw new ConnectorStoppedError('Connector has been shut down.');
+    }
+    if (state === 'stopping') {
+      throw new ConnectorStoppedError('Connector is shutting down.');
+    }
+  };
+}
+
+class ConnectorStoppedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConnectorStoppedError';
+  }
+}
+
+class PinoCoreLogger<TContext extends LogContext> implements CoreLogger<TContext> {
+  public constructor(
+    private readonly raw: PinoLogger,
+    private readonly contextProvider: () => TContext,
+    private readonly guard: () => void,
+    private readonly onLevelChange: (level: LogLevelName) => void
+  ) {}
+
+  public get level(): LogLevelName {
+    this.guard();
+    return this.raw.level as LogLevelName;
+  }
+
+  public setLevel(level: LogLevelName): void {
+    this.guard();
+    this.onLevelChange(level);
+  }
+
+  public getContext(): TContext {
+    return this.contextProvider();
+  }
+
+  public bind(bindings: LogBindings = {}): CoreLogger<TContext> {
+    this.guard();
+    const sanitizedBindings = { ...bindings };
+    const child = this.raw.child(sanitizedBindings);
+    return new PinoCoreLogger(child, this.contextProvider, this.guard, this.onLevelChange);
+  }
+
+  public async flush(): Promise<void> {
+    this.guard();
+    await flushLogger(this.raw);
+  }
+
+  public log(level: LogLevelName, ...args: LogMethodArguments): void {
+    this.guard();
+    this.dispatch(level, args);
+  }
+
+  public fatal(...args: LogMethodArguments): void {
+    this.log('fatal', ...args);
+  }
+
+  public error(...args: LogMethodArguments): void {
+    this.log('error', ...args);
+  }
+
+  public warn(...args: LogMethodArguments): void {
+    this.log('warn', ...args);
+  }
+
+  public info(...args: LogMethodArguments): void {
+    this.log('info', ...args);
+  }
+
+  public debug(...args: LogMethodArguments): void {
+    this.log('debug', ...args);
+  }
+
+  public trace(...args: LogMethodArguments): void {
+    this.log('trace', ...args);
+  }
+
+  private dispatch(level: LogLevelName, args: LogMethodArguments): void {
+    const [message, metadata] = args;
+    const payload = buildLogPayload(metadata, this.contextProvider);
+    (this.raw as PinoLogger & Record<LogLevelName, (obj: object, msg: string) => void>)[level](payload, message);
+  }
+}
+
+function createCoreLogger<TContext extends LogContext>(
+  raw: PinoLogger,
+  contextProvider: () => TContext,
+  guard: () => void,
+  onLevelChange: (level: LogLevelName) => void
+): CoreLogger<TContext> {
+  return new PinoCoreLogger(raw, contextProvider, guard, onLevelChange);
+}
+
+function buildLogPayload<TContext extends LogContext>(
+  metadata: LogMetadata | undefined,
+  contextProvider: () => TContext
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+
+  if (!metadata) {
+    const context = contextProvider();
+    if (hasEntries(context)) {
+      payload.context = { ...context };
+    }
+    return payload;
+  }
+
+  const { data, context, error, ...rest } = metadata;
+
+  if (Object.keys(rest).length > 0) {
+    Object.assign(payload, rest);
+  }
+
+  if (data && Object.keys(data).length > 0) {
+    Object.assign(payload, data);
+  }
+
+  const resolvedContext = mergeContexts(contextProvider(), context);
+  if (hasEntries(resolvedContext)) {
+    payload.context = resolvedContext;
+  }
+
+  if (error !== undefined) {
+    payload.error = error;
+  }
+
+  return payload;
+}
+
+function mergeContexts<TContext extends LogContext>(
+  base: TContext,
+  override: LogContext | undefined
+): LogContext {
+  const baseCopy = { ...base } as LogContext;
+  if (!override || Object.keys(override).length === 0) {
+    return baseCopy;
+  }
+
+  return {
+    ...baseCopy,
+    ...override
+  };
+}
+
+function hasEntries(value: LogContext | undefined): boolean {
+  return Boolean(value && Object.keys(value).length > 0);
+}
+
+async function flushLogger(logger: PinoLogger): Promise<void> {
+  if (typeof logger.flush === 'function') {
+    await Promise.resolve(logger.flush());
+  }
+}
+
+async function closeLoggerTransport(logger: PinoLogger): Promise<void> {
+  const transport = (logger as unknown as { transport?: { close?: () => unknown | Promise<unknown> } }).transport;
+  if (transport?.close) {
+    await Promise.resolve(transport.close());
+  }
+}
