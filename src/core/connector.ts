@@ -26,6 +26,13 @@ import {
   type TransportRegistryDiagnostics,
 } from "./transport-registry/index.js";
 import {
+  buildConnectorDiagnosticsSnapshot,
+  createPluginDiagnosticsLogger,
+  createSerializerDiagnosticsLogger,
+  createTransportDiagnosticsLogger,
+  type ConnectorDiagnosticsSnapshot,
+} from "./diagnostics/index.js";
+import {
   builtinTransports,
   registerBuiltinTransports,
 } from "../transports/index.js";
@@ -81,6 +88,7 @@ export interface Connector<TContext extends LogContext = LogContext> {
   removeTransport(name: string): Promise<void>;
   listTransports(): readonly RegisteredTransport[];
   getTransportDiagnostics(): TransportRegistryDiagnostics;
+  getDiagnosticsSnapshot(): ConnectorDiagnosticsSnapshot;
   setLevel(level: LogLevelName): void;
   updateConfig(next: ConnectorConfigInput): void;
   flush(): Promise<void>;
@@ -248,6 +256,11 @@ export function createConnector<TContext extends LogContext = LogContext>(
     },
     getTransportDiagnostics(): TransportRegistryDiagnostics {
       return transportRegistry.getDiagnostics();
+    },
+    getDiagnosticsSnapshot(): ConnectorDiagnosticsSnapshot {
+      return buildConnectorDiagnosticsSnapshot(
+        transportRegistry.getDiagnostics(),
+      );
     },
     setLevel(level: LogLevelName): void {
       guard();
@@ -645,35 +658,6 @@ async function closeLoggerTransport(logger: PinoLogger): Promise<void> {
   }
 }
 
-function createTransportDiagnosticsLogger(
-  logger: PinoLogger,
-): DiagnosticsLogger {
-  const scoped = logger.child({ subsystem: "transport-registry" });
-  return {
-    info(message: string, metadata?: LogMetadata): void {
-      scoped.info(metadata ?? {}, message);
-    },
-    warn(message: string, metadata?: LogMetadata): void {
-      scoped.warn(metadata ?? {}, message);
-    },
-    error(message: string, metadata?: LogMetadata): void {
-      scoped.error(metadata ?? {}, message);
-    },
-  };
-}
-
-function createPluginDiagnosticsLogger(logger: PinoLogger): HookLogger {
-  const scoped = logger.child({ subsystem: "plugin-hooks" });
-  return {
-    warn(message: string, context?: Record<string, unknown>): void {
-      scoped.warn(context ?? {}, message);
-    },
-    error(message: string, context?: Record<string, unknown>): void {
-      scoped.error(context ?? {}, message);
-    },
-  };
-}
-
 async function registerConfiguredTransports(
   getTransports: () => readonly TransportRegistration[],
   setTransports: (transports: readonly TransportRegistration[]) => void,
@@ -764,18 +748,4 @@ function upsertTransports(
     }
   }
   return result;
-}
-
-function createSerializerDiagnosticsLogger(
-  logger: PinoLogger,
-): SerializerLogger {
-  const scoped = logger.child({ subsystem: "serializers" });
-  return {
-    warn(message: string, context?: Record<string, unknown>): void {
-      scoped.warn(context ?? {}, message);
-    },
-    error(message: string, context?: Record<string, unknown>): void {
-      scoped.error(context ?? {}, message);
-    },
-  };
 }
