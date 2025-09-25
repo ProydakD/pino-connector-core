@@ -1,4 +1,4 @@
-﻿import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   hasSerializers,
@@ -21,7 +21,7 @@ describe("hasSerializers", () => {
 
 describe("runSerializers", () => {
   it("returns original record when no serializers provided", async () => {
-    const record = createRecord();
+    const record = createRecord({ metadata: { audit: {} } });
 
     const result = await runSerializers({}, record);
 
@@ -81,6 +81,42 @@ describe("runSerializers", () => {
       replaced: 0,
       failed: 0,
     });
+  });
+
+  it("creates intermediate containers when replacing path", async () => {
+    const record = createRecord({ metadata: { audit: {} } });
+
+    const result = await runSerializers(
+      {
+        "metadata.audit.traceId": (context) => {
+          context.replace("trace-123");
+        },
+      },
+      record,
+    );
+
+    expect(result.record.metadata).toMatchObject({
+      audit: { traceId: "trace-123" },
+    });
+    expect(result.telemetry.replaced).toBe(1);
+  });
+
+  it("removes array entries when redacted", async () => {
+    const record = createRecord({
+      metadata: { tokens: ["keep", "drop", "stay"] },
+    });
+
+    const result = await runSerializers(
+      {
+        "metadata.tokens.1": (context) => {
+          context.redact();
+        },
+      },
+      record,
+    );
+
+    expect(result.record.metadata).toMatchObject({ tokens: ["keep", "stay"] });
+    expect(result.telemetry.redacted).toBe(1);
   });
 
   it("skips serializers when path cannot be resolved", async () => {

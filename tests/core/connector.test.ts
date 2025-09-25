@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import pino from "pino";
+import pino, { type Logger as PinoLogger } from "pino";
 
 import { createConnector } from "../../src/core/connector.js";
+import * as transportsModule from "../../src/transports/index.js";
 import type {
   LogContext,
   TransportFactory,
@@ -12,6 +13,33 @@ const waitForAsyncWork = (): Promise<void> =>
   new Promise((resolve) => {
     setImmediate(resolve);
   });
+
+function createStubLogger(): {
+  readonly logger: PinoLogger;
+  readonly warn: ReturnType<typeof vi.fn>;
+} {
+  const warn = vi.fn();
+  const info = vi.fn();
+  const error = vi.fn();
+  const debug = vi.fn();
+  const trace = vi.fn();
+  const fatal = vi.fn();
+  const flush = vi.fn();
+  const child = vi.fn();
+  const stub: Partial<PinoLogger> & Record<string, unknown> = {
+    level: "info",
+    warn,
+    info,
+    error,
+    debug,
+    trace,
+    fatal,
+    flush,
+  };
+  child.mockReturnValue(stub);
+  Object.assign(stub, { child });
+  return { logger: stub as PinoLogger, warn, error, info };
+}
 
 describe("createConnector", () => {
   it("routes records through transports with plugins and serializers", async () => {
@@ -155,6 +183,117 @@ describe("createConnector", () => {
     expect(connector.getContext()).toEqual({ tenant: "acme" });
     expect(connector.config.context.propagateAsync).toBe(false);
 
+    await connector.shutdown();
+  });
+
+  it("logs warning when configured transport factory throws", async () => {
+    const { logger, warn } = createStubLogger();
+    const failingFactory: TransportFactory = async () => {
+      throw new Error("factory failed");
+    };
+
+    const connector = createConnector({
+      logger,
+      useBuiltinTransports: false,
+      transportFactories: {
+        broken: failingFactory,
+      },
+      config: {
+        transports: [
+          {
+            name: "broken",
+            config: {},
+          },
+        ],
+      },
+    });
+
+    await waitForAsyncWork();
+    await waitForAsyncWork();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: "broken",
+        error: expect.any(Error),
+      }),
+      "failed to register configured transport",
+    );
+
+    await connector.shutdown();
+  });
+
+  it("registers and removes transports via public API", async () => {
+    const { logger, warn } = createStubLogger();
+    const transportClose = vi.fn();
+    (
+      logger as unknown as { transport?: { close?: () => Promise<void> } }
+    ).transport = {
+      close: transportClose,
+    };
+
+    const lifecycleShutdown = vi.fn(async () => {});
+    const lifecycleFlush = vi.fn(async () => {});
+
+    const connector = createConnector({
+      logger,
+      useBuiltinTransports: false,
+      config: {
+        level: "info",
+        context: {
+          initial: {},
+          propagateAsync: true,
+        },
+        transports: [],
+      },
+    });
+
+    const factory = vi.fn(async () => ({
+      async publish() {
+        // noop
+      },
+      flush: lifecycleFlush,
+      shutdown: lifecycleShutdown,
+    }));
+
+    await connector.registerTransport({ name: "dynamic", config: {} }, factory);
+    await waitForAsyncWork();
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(connector.getTransports().map((item) => item.name)).toContain(
+      "dynamic",
+    );
+
+    await connector.flush();
+    expect(logger.flush as ReturnType<typeof vi.fn>).toHaveBeenCalled();
+
+    await connector.removeTransport("dynamic");
+    expect(
+      connector.getTransports().some((item) => item.name === "dynamic"),
+    ).toBe(false);
+
+    await connector.shutdown();
+    expect(lifecycleFlush).toHaveBeenCalled();
+    expect(lifecycleShutdown).toHaveBeenCalled();
+    expect(transportClose).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+  it("warns when builtin transport registration fails", async () => {
+    const { logger, warn } = createStubLogger();
+    const builtinSpy = vi
+      .spyOn(transportsModule, "registerBuiltinTransports")
+      .mockRejectedValue(new Error("builtin failure"));
+
+    const connector = createConnector({ logger });
+
+    await waitForAsyncWork();
+    await waitForAsyncWork();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.any(Error) }),
+      "failed to register builtin transports",
+    );
+
+    builtinSpy.mockRestore();
     await connector.shutdown();
   });
 

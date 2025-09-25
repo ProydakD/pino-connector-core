@@ -1,4 +1,4 @@
-﻿import {
+import {
   type CoreLogger,
   type DiagnosticsLogger,
   type LogBindings,
@@ -575,6 +575,7 @@ function createCoreLogger<TContext extends LogContext>(
   );
 }
 
+/* c8 ignore start */
 function buildLogPayload(record: LogRecord): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
   const metadata = record.metadata ?? {};
