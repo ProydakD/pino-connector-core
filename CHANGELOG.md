@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2025-09-25
+
+- describe changes here
+
 ## 0.2.0 - 2025-09-25
 
 - describe changes here
