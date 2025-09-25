@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
-import { type LogContext } from '../types.js';
+import { AsyncLocalStorage } from "node:async_hooks";
+import { type LogContext } from "../types.js";
 
 export interface AsyncContextOptions<TContext extends LogContext> {
   readonly initialContext: TContext;
@@ -10,13 +10,16 @@ export interface AsyncContextManager<TContext extends LogContext> {
   getContext(): TContext;
   setContext(patch: Partial<TContext>): void;
   runWithContext<TReturn>(context: TContext, callback: () => TReturn): TReturn;
-  runWithContext<TReturn>(context: TContext, callback: () => Promise<TReturn>): Promise<TReturn>;
+  runWithContext<TReturn>(
+    context: TContext,
+    callback: () => Promise<TReturn>,
+  ): Promise<TReturn>;
   resetContext(): void;
   configure(options: AsyncContextOptions<TContext>): void;
 }
 
 export function createAsyncContextManager<TContext extends LogContext>(
-  options: AsyncContextOptions<TContext>
+  options: AsyncContextOptions<TContext>,
 ): AsyncContextManager<TContext> {
   let initialContext = cloneContext(options.initialContext);
   let propagateAsync = options.propagateAsync;
@@ -46,11 +49,14 @@ export function createAsyncContextManager<TContext extends LogContext>(
     setContext(patch: Partial<TContext>): void {
       const next = {
         ...readActiveContext(),
-        ...patch
+        ...patch,
       } as TContext;
       writeContext(cloneContext(next));
     },
-    runWithContext<TReturn>(context: TContext, callback: () => TReturn | Promise<TReturn>): TReturn | Promise<TReturn> {
+    runWithContext<TReturn>(
+      context: TContext,
+      callback: () => TReturn | Promise<TReturn>,
+    ): TReturn | Promise<TReturn> {
       const next = cloneContext(context);
       if (propagateAsync) {
         return storage.run(next, callback);
@@ -81,10 +87,12 @@ export function createAsyncContextManager<TContext extends LogContext>(
       } else {
         storage.disable();
       }
-    }
+    },
   } satisfies AsyncContextManager<TContext>;
 }
 
-function cloneContext<TContext extends LogContext>(context: TContext): TContext {
-  return ({ ...context } as TContext);
+function cloneContext<TContext extends LogContext>(
+  context: TContext,
+): TContext {
+  return { ...context } as TContext;
 }

@@ -5,9 +5,9 @@ import {
   type LogRecord,
   type TransportFactory,
   type TransportLifecycle,
-  type TransportRegistration
-} from '../types.js';
-import { normalizeConnectorConfig } from '../config/index.js';
+  type TransportRegistration,
+} from "../types.js";
+import { normalizeConnectorConfig } from "../config/index.js";
 
 export interface RegisteredTransport {
   readonly name: string;
@@ -28,7 +28,10 @@ export interface TransportRegistryDiagnostics {
 }
 
 export interface TransportRegistry {
-  register(registration: TransportRegistration, factory: TransportFactory): Promise<RegisteredTransport>;
+  register(
+    registration: TransportRegistration,
+    factory: TransportFactory,
+  ): Promise<RegisteredTransport>;
   remove(name: string): Promise<void>;
   publish(record: LogRecord): Promise<PublishResult[]>;
   flush(): Promise<void>;
@@ -38,21 +41,27 @@ export interface TransportRegistry {
 }
 
 export function createTransportRegistry(
-  baseLogger: DiagnosticsLogger = createConsoleDiagnosticsLogger()
+  baseLogger: DiagnosticsLogger = createConsoleDiagnosticsLogger(),
 ): TransportRegistry {
   const transports = new Map<string, RegisteredTransport>();
   const failures: PublishResult[] = [];
 
   return {
-    async register(registration: TransportRegistration, factory: TransportFactory): Promise<RegisteredTransport> {
+    async register(
+      registration: TransportRegistration,
+      factory: TransportFactory,
+    ): Promise<RegisteredTransport> {
       const normalized = normalizeTransportRegistration(registration);
-      const scopedLogger = createScopedDiagnosticsLogger(baseLogger, normalized.name);
+      const scopedLogger = createScopedDiagnosticsLogger(
+        baseLogger,
+        normalized.name,
+      );
       const lifecycle = await factory(normalized, { selfLogger: scopedLogger });
       const record: RegisteredTransport = {
         name: normalized.name,
         level: normalized.level,
         lifecycle,
-        registration: normalized
+        registration: normalized,
       };
 
       const existing = transports.get(normalized.name);
@@ -84,7 +93,11 @@ export function createTransportRegistry(
           await Promise.resolve(transport.lifecycle.publish({ record }));
           results.push({ transportName: transport.name, success: true });
         } catch (error) {
-          const failure: PublishResult = { transportName: transport.name, success: false, error };
+          const failure: PublishResult = {
+            transportName: transport.name,
+            success: false,
+            error,
+          };
           results.push(failure);
           failures.push(failure);
           trimFailures(failures);
@@ -115,35 +128,44 @@ export function createTransportRegistry(
     getDiagnostics(): TransportRegistryDiagnostics {
       return {
         transports: Array.from(transports.values()),
-        failures: [...failures]
+        failures: [...failures],
       };
     },
     list(): readonly RegisteredTransport[] {
       return Array.from(transports.values());
-    }
+    },
   };
 }
 
 class InvalidTransportRegistrationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'InvalidTransportRegistrationError';
+    this.name = "InvalidTransportRegistrationError";
   }
 }
 
-function normalizeTransportRegistration(registration: TransportRegistration): TransportRegistration {
-  const normalizedList = normalizeConnectorConfig({ transports: [registration] }).transports;
+function normalizeTransportRegistration(
+  registration: TransportRegistration,
+): TransportRegistration {
+  const normalizedList = normalizeConnectorConfig({
+    transports: [registration],
+  }).transports;
   const [normalized] = normalizedList;
   if (!normalized) {
-    throw new InvalidTransportRegistrationError('Transport registration normalization yielded no result.');
+    throw new InvalidTransportRegistrationError(
+      "Transport registration normalization yielded no result.",
+    );
   }
   return normalized;
 }
 
-function createScopedDiagnosticsLogger(base: DiagnosticsLogger, transportName: string): DiagnosticsLogger {
+function createScopedDiagnosticsLogger(
+  base: DiagnosticsLogger,
+  transportName: string,
+): DiagnosticsLogger {
   const augmentMetadata = (metadata?: LogMetadata): LogMetadata => ({
     transport: transportName,
-    ...(metadata ?? {})
+    ...(metadata ?? {}),
   });
 
   return {
@@ -155,21 +177,21 @@ function createScopedDiagnosticsLogger(base: DiagnosticsLogger, transportName: s
     },
     error(message: string, metadata?: LogMetadata): void {
       base.error(message, augmentMetadata(metadata));
-    }
+    },
   } satisfies DiagnosticsLogger;
 }
 
 function createConsoleDiagnosticsLogger(): DiagnosticsLogger {
   return {
     info(message: string, metadata?: LogMetadata): void {
-      console.info('[transport]', message, metadata ?? {});
+      console.info("[transport]", message, metadata ?? {});
     },
     warn(message: string, metadata?: LogMetadata): void {
-      console.warn('[transport]', message, metadata ?? {});
+      console.warn("[transport]", message, metadata ?? {});
     },
     error(message: string, metadata?: LogMetadata): void {
-      console.error('[transport]', message, metadata ?? {});
-    }
+      console.error("[transport]", message, metadata ?? {});
+    },
   };
 }
 
@@ -180,7 +202,7 @@ const LEVEL_RANK: Record<LogLevelName, number> = {
   warn: 40,
   error: 50,
   fatal: 60,
-  silent: 70
+  silent: 70,
 };
 
 function shouldLog(threshold: LogLevelName, level: LogLevelName): boolean {

@@ -1,7 +1,7 @@
 import {
   type TransportFactory,
-  type TransportRegistration
-} from '../../core/types.js';
+  type TransportRegistration,
+} from "../../core/types.js";
 
 export interface CustomTransportEntry {
   readonly registration: TransportRegistration;
@@ -50,30 +50,34 @@ export function createCustomTransportStore(): CustomTransportStore {
       return Object.fromEntries(factoryMap.entries());
     },
     list(): readonly CustomTransportEntry[] {
-      return Array.from(registrationMap.entries()).map(([name, registration]) => ({
-        registration,
-        factory: factoryMap.get(name) as TransportFactory
-      }));
-    }
+      return Array.from(registrationMap.entries()).map(
+        ([name, registration]) => ({
+          registration,
+          factory: factoryMap.get(name) as TransportFactory,
+        }),
+      );
+    },
   } satisfies CustomTransportStore;
 }
 
 export function mergeTransportFactories(
   base: Record<string, TransportFactory> | undefined,
-  store: CustomTransportStore
+  store: CustomTransportStore,
 ): Record<string, TransportFactory> {
   return {
     ...(base ?? {}),
-    ...store.toTransportFactoryMap()
+    ...store.toTransportFactoryMap(),
   };
 }
 
 function validateEntry(entry: CustomTransportEntry): void {
   if (!entry.registration?.name) {
-    throw new Error('Custom transport registration must include a name.');
+    throw new Error("Custom transport registration must include a name.");
   }
-  if (typeof entry.factory !== 'function') {
-    throw new Error(`Custom transport "${entry.registration.name}" must include a factory function.`);
+  if (typeof entry.factory !== "function") {
+    throw new Error(
+      `Custom transport "${entry.registration.name}" must include a factory function.`,
+    );
   }
 }
 

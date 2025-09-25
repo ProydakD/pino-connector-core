@@ -1,11 +1,11 @@
 export type LogLevelName =
-  | 'silent'
-  | 'fatal'
-  | 'error'
-  | 'warn'
-  | 'info'
-  | 'debug'
-  | 'trace';
+  | "silent"
+  | "fatal"
+  | "error"
+  | "warn"
+  | "info"
+  | "debug"
+  | "trace";
 
 export type LogMethodArguments = [message: string, metadata?: LogMetadata];
 
@@ -39,7 +39,8 @@ export interface LoggerMethods {
   log(level: LogLevelName, ...args: LogMethodArguments): void;
 }
 
-export interface CoreLogger<TContext extends LogContext = LogContext> extends LoggerMethods {
+export interface CoreLogger<TContext extends LogContext = LogContext>
+  extends LoggerMethods {
   readonly level: LogLevelName;
   setLevel(level: LogLevelName): void;
   getContext(): TContext;
@@ -80,7 +81,7 @@ export interface TransportFactoryContext {
 
 export type TransportFactory<TConfig = unknown> = (
   registration: TransportRegistration<TConfig>,
-  context: TransportFactoryContext
+  context: TransportFactoryContext,
 ) => Promise<TransportLifecycle> | TransportLifecycle;
 
 export interface DiagnosticsLogger {
@@ -94,14 +95,18 @@ export interface BeforeLogHookContext {
   setRecord(next: LogRecord): void;
 }
 
-export type BeforeLogHook = (context: BeforeLogHookContext) => Promise<void> | void;
+export type BeforeLogHook = (
+  context: BeforeLogHookContext,
+) => Promise<void> | void;
 
 export interface AfterLogHookContext {
   readonly record: Readonly<LogRecord>;
   readonly transportResults: readonly TransportResult[];
 }
 
-export type AfterLogHook = (context: AfterLogHookContext) => Promise<void> | void;
+export type AfterLogHook = (
+  context: AfterLogHookContext,
+) => Promise<void> | void;
 
 export interface TransportResult {
   readonly transportName: string;
@@ -117,7 +122,7 @@ export interface PluginRegistration {
   readonly enabled?: boolean;
 }
 
-export type PluginStage = 'before' | 'after';
+export type PluginStage = "before" | "after";
 
 export interface SerializerContext {
   readonly record: LogRecord;
