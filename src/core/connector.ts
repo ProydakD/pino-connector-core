@@ -25,6 +25,7 @@ import {
   type TransportRegistryDiagnostics
 } from './transport-registry/index.js';
 import { builtinTransports, registerBuiltinTransports } from '../transports/index.js';
+import { mergeTransportFactories, type CustomTransportStore } from '../transports/custom/index.js';
 import pino, { type Logger as PinoLogger, type LoggerOptions as PinoLoggerOptions } from 'pino';
 
 export type ConnectorState = 'running' | 'stopping' | 'stopped';
@@ -35,6 +36,7 @@ export interface CreateConnectorOptions<TContext extends LogContext = LogContext
   readonly logger?: PinoLogger;
   readonly contextProvider?: () => TContext;
   readonly transportFactories?: Record<string, TransportFactory>;
+  readonly customTransports?: CustomTransportStore;
   readonly useBuiltinTransports?: boolean;
   readonly selfLogger?: DiagnosticsLogger;
 }
@@ -87,6 +89,20 @@ export function createConnector<TContext extends LogContext = LogContext>(
   const transportRegistry = createTransportRegistry(
     options.selfLogger ?? createTransportDiagnosticsLogger(rawLogger)
   );
+
+  const customTransports = options.customTransports;
+  let resolvedFactories = options.transportFactories;
+
+  if (customTransports) {
+    resolvedFactories = mergeTransportFactories(options.transportFactories ?? {}, customTransports);
+    currentConfig = {
+      ...currentConfig,
+      transports: upsertTransports(
+        currentConfig.transports,
+        Array.from(customTransports.registrations.values())
+      )
+    };
+  }
 
   void registerConfiguredTransports(
     () => currentConfig.transports,
@@ -554,11 +570,28 @@ async function registerMissingBuiltinTransports(
     logger.warn({ error }, 'failed to register builtin transports');
   }
 }
-function upsertTransport(
+
+function upsertTransport(
   existing: readonly TransportRegistration[],
   next: TransportRegistration
 ): readonly TransportRegistration[] {
   const filtered = existing.filter((transport) => transport.name !== next.name);
   return [...filtered, next];
 }
-
+
+function upsertTransports(
+  existing: readonly TransportRegistration[],
+  additions: readonly TransportRegistration[]
+): readonly TransportRegistration[] {
+  const result: TransportRegistration[] = [...existing];
+  for (const addition of additions) {
+    const index = result.findIndex((transport) => transport.name === addition.name);
+    if (index >= 0) {
+      result[index] = addition;
+    } else {
+      result.push(addition);
+    }
+  }
+  return result;
+}
+
