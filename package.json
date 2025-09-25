@@ -27,7 +27,27 @@
     "node": ">=18"
   },
   "sideEffects": false,
-  "scripts": {},
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "bench": "vitest bench",
+    "coverage": "vitest run --coverage"
+  },
   "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "@types/node": "^20.14.10",
+    "tsup": "^8.1.0",
+    "vitest": "^1.6.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "eslint": "^9.9.0",
+    "@eslint/js": "^9.9.0",
+    "typescript-eslint": "^7.17.0",
+    "prettier": "^3.3.2"
+  },
+  "packageManager": "pnpm@9.9.0"
 }
