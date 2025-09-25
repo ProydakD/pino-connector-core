@@ -6,6 +6,7 @@ import {
   type TransportFactory,
   type TransportLifecycle,
   type TransportRegistration,
+  type TransportResult,
 } from "../types.js";
 import { normalizeConnectorConfig } from "../config/index.js";
 
@@ -16,15 +17,9 @@ export interface RegisteredTransport {
   readonly registration: TransportRegistration;
 }
 
-export interface PublishResult {
-  readonly transportName: string;
-  readonly success: boolean;
-  readonly error?: unknown;
-}
-
 export interface TransportRegistryDiagnostics {
   readonly transports: readonly RegisteredTransport[];
-  readonly failures: readonly PublishResult[];
+  readonly failures: readonly TransportResult[];
 }
 
 export interface TransportRegistry {
@@ -33,7 +28,7 @@ export interface TransportRegistry {
     factory: TransportFactory,
   ): Promise<RegisteredTransport>;
   remove(name: string): Promise<void>;
-  publish(record: LogRecord): Promise<PublishResult[]>;
+  publish(record: LogRecord): Promise<TransportResult[]>;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
   getDiagnostics(): TransportRegistryDiagnostics;
@@ -44,7 +39,7 @@ export function createTransportRegistry(
   baseLogger: DiagnosticsLogger = createConsoleDiagnosticsLogger(),
 ): TransportRegistry {
   const transports = new Map<string, RegisteredTransport>();
-  const failures: PublishResult[] = [];
+  const failures: TransportResult[] = [];
 
   return {
     async register(
@@ -82,8 +77,8 @@ export function createTransportRegistry(
         await Promise.resolve(existing.lifecycle.shutdown());
       }
     },
-    async publish(record: LogRecord): Promise<PublishResult[]> {
-      const results: PublishResult[] = [];
+    async publish(record: LogRecord): Promise<TransportResult[]> {
+      const results: TransportResult[] = [];
       for (const transport of transports.values()) {
         if (transport.level && !shouldLog(transport.level, record.level)) {
           continue;
@@ -91,11 +86,11 @@ export function createTransportRegistry(
 
         try {
           await Promise.resolve(transport.lifecycle.publish({ record }));
-          results.push({ transportName: transport.name, success: true });
+          results.push({ transportName: transport.name, succeeded: true });
         } catch (error) {
-          const failure: PublishResult = {
+          const failure: TransportResult = {
             transportName: transport.name,
-            success: false,
+            succeeded: false,
             error,
           };
           results.push(failure);
@@ -211,7 +206,7 @@ function shouldLog(threshold: LogLevelName, level: LogLevelName): boolean {
 
 const MAX_FAILURES = 50;
 
-function trimFailures(store: PublishResult[]): void {
+function trimFailures(store: TransportResult[]): void {
   if (store.length > MAX_FAILURES) {
     store.splice(0, store.length - MAX_FAILURES);
   }

@@ -11,6 +11,7 @@ import {
   type SerializerMap,
   type TransportFactory,
   type TransportRegistration,
+  type TransportResult,
 } from "./types.js";
 import {
   type ConnectorConfig,
@@ -32,6 +33,13 @@ import {
   mergeTransportFactories,
   type CustomTransportStore,
 } from "../transports/custom/index.js";
+import {
+  buildPluginExecutionPlan,
+  runAfterHooks,
+  runBeforeHooks,
+  type HookLogger,
+  type PluginExecutionPlan,
+} from "../plugins/hooks/index.js";
 import pino, {
   type Logger as PinoLogger,
   type LoggerOptions as PinoLoggerOptions,
@@ -112,14 +120,16 @@ export function createConnector<TContext extends LogContext = LogContext>(
     options.selfLogger ?? createTransportDiagnosticsLogger(rawLogger),
   );
 
+  let currentPluginPlan = buildPluginExecutionPlan(currentConfig.plugins);
+  const getPluginPlan = () => currentPluginPlan;
+  const pluginLogger = createPluginDiagnosticsLogger(rawLogger);
+
   const customTransports = options.customTransports;
-  let resolvedFactories = options.transportFactories;
+  const resolvedFactories = customTransports
+    ? mergeTransportFactories(options.transportFactories, customTransports)
+    : options.transportFactories;
 
   if (customTransports) {
-    resolvedFactories = mergeTransportFactories(
-      options.transportFactories ?? {},
-      customTransports,
-    );
     currentConfig = {
       ...currentConfig,
       transports: upsertTransports(
@@ -162,6 +172,8 @@ export function createConnector<TContext extends LogContext = LogContext>(
     guard,
     applyLevel,
     transportRegistry,
+    getPluginPlan,
+    pluginLogger,
     {},
   );
 
@@ -253,6 +265,12 @@ export function createConnector<TContext extends LogContext = LogContext>(
       });
       currentConfig = mergedConfig;
       rawLogger.level = mergedConfig.level;
+      currentPluginPlan = buildPluginExecutionPlan(currentConfig.plugins);
+
+      const factoriesForUpdate = customTransports
+        ? mergeTransportFactories(options.transportFactories, customTransports)
+        : options.transportFactories;
+
       void registerConfiguredTransports(
         () => currentConfig.transports,
         (nextTransports) => {
@@ -261,7 +279,7 @@ export function createConnector<TContext extends LogContext = LogContext>(
             transports: nextTransports,
           };
         },
-        options.transportFactories,
+        factoriesForUpdate,
         transportRegistry,
         rawLogger,
       );
@@ -363,6 +381,8 @@ class PinoCoreLogger<TContext extends LogContext>
     private readonly guard: () => void,
     private readonly onLevelChange: (level: LogLevelName) => void,
     private readonly transportRegistry: TransportRegistry,
+    private readonly getPluginPlan: () => PluginExecutionPlan,
+    private readonly hookLogger: HookLogger,
     private readonly bindings: LogBindings,
   ) {}
 
@@ -390,6 +410,8 @@ class PinoCoreLogger<TContext extends LogContext>
       this.guard,
       this.onLevelChange,
       this.transportRegistry,
+      this.getPluginPlan,
+      this.hookLogger,
       sanitizedBindings,
     );
   }
@@ -401,7 +423,7 @@ class PinoCoreLogger<TContext extends LogContext>
 
   public log(level: LogLevelName, ...args: LogMethodArguments): void {
     this.guard();
-    this.dispatch(level, args);
+    void this.dispatch(level, args);
   }
 
   public fatal(...args: LogMethodArguments): void {
@@ -428,23 +450,56 @@ class PinoCoreLogger<TContext extends LogContext>
     this.log("trace", ...args);
   }
 
-  private dispatch(level: LogLevelName, args: LogMethodArguments): void {
+  private async dispatch(
+    level: LogLevelName,
+    args: LogMethodArguments,
+  ): Promise<void> {
     const [message, metadata] = args;
-    const record = buildLogRecord(
+    const initialRecord = buildLogRecord(
       level,
       message,
       metadata,
       this.contextProvider,
       this.bindings,
     );
-    void this.transportRegistry.publish(record).catch((error) => {
-      this.raw.warn({ error }, "transport publish failed");
-    });
-    const payload = buildLogPayload(metadata, this.contextProvider);
+
+    const plan = this.getPluginPlan();
+    let finalRecord = initialRecord;
+
+    try {
+      const before = await runBeforeHooks(
+        plan.before,
+        initialRecord,
+        this.hookLogger,
+      );
+      finalRecord = before.record;
+    } catch (error) {
+      this.hookLogger.error("before hooks pipeline failed", { error });
+    }
+
+    const payload = buildLogPayload(finalRecord);
     (
       this.raw as PinoLogger &
         Record<LogLevelName, (obj: object, msg: string) => void>
-    )[level](payload, message);
+    )[finalRecord.level](payload, finalRecord.message);
+
+    void this.transportRegistry
+      .publish(finalRecord)
+      .then(async (results) => {
+        const transportResults = results as TransportResult[];
+        try {
+          await runAfterHooks(
+            plan.after,
+            { record: finalRecord, transportResults },
+            this.hookLogger,
+          );
+        } catch (error) {
+          this.hookLogger.error("after hooks pipeline failed", { error });
+        }
+      })
+      .catch((error) => {
+        this.raw.warn({ error }, "transport publish failed");
+      });
   }
 }
 
@@ -454,6 +509,8 @@ function createCoreLogger<TContext extends LogContext>(
   guard: () => void,
   onLevelChange: (level: LogLevelName) => void,
   transportRegistry: TransportRegistry,
+  getPluginPlan: () => PluginExecutionPlan,
+  hookLogger: HookLogger,
   bindings: LogBindings,
 ): CoreLogger<TContext> {
   return new PinoCoreLogger(
@@ -462,27 +519,22 @@ function createCoreLogger<TContext extends LogContext>(
     guard,
     onLevelChange,
     transportRegistry,
+    getPluginPlan,
+    hookLogger,
     bindings,
   );
 }
 
-function buildLogPayload<TContext extends LogContext>(
-  metadata: LogMetadata | undefined,
-  contextProvider: () => TContext,
-): Record<string, unknown> {
+function buildLogPayload(record: LogRecord): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
+  const metadata = record.metadata ?? {};
+  const { data, context, error, ...rest } = metadata as LogMetadata & {
+    data?: Record<string, unknown>;
+    context?: LogContext;
+    error?: unknown;
+  };
 
-  if (!metadata) {
-    const context = contextProvider();
-    if (hasEntries(context)) {
-      payload.context = { ...context };
-    }
-    return payload;
-  }
-
-  const { data, context, error, ...rest } = metadata;
-
-  if (Object.keys(rest).length > 0) {
+  if (rest && Object.keys(rest).length > 0) {
     Object.assign(payload, rest);
   }
 
@@ -490,7 +542,7 @@ function buildLogPayload<TContext extends LogContext>(
     Object.assign(payload, data);
   }
 
-  const resolvedContext = mergeContexts(contextProvider(), context);
+  const resolvedContext = mergeContexts(record.context, context);
   if (hasEntries(resolvedContext)) {
     payload.context = resolvedContext;
   }
@@ -569,6 +621,18 @@ function createTransportDiagnosticsLogger(
     },
     error(message: string, metadata?: LogMetadata): void {
       scoped.error(metadata ?? {}, message);
+    },
+  };
+}
+
+function createPluginDiagnosticsLogger(logger: PinoLogger): HookLogger {
+  const scoped = logger.child({ subsystem: "plugin-hooks" });
+  return {
+    warn(message: string, context?: Record<string, unknown>): void {
+      scoped.warn(context ?? {}, message);
+    },
+    error(message: string, context?: Record<string, unknown>): void {
+      scoped.error(context ?? {}, message);
     },
   };
 }
